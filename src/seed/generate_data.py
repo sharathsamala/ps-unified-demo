@@ -20,12 +20,6 @@ from datetime import datetime, timedelta
 
 from databricks.sdk import WorkspaceClient
 
-_parser = argparse.ArgumentParser()
-_parser.add_argument("--catalog", required=True)
-_args, _ = _parser.parse_known_args()
-CATALOG = _args.catalog
-VOLUME_PATH = f"/Volumes/{CATALOG}/raw/landing"
-
 N_PARTS = 50_000
 N_SUPPLIERS = 200
 N_CUSTOMERS = 1_500
@@ -180,8 +174,10 @@ def _write_csv(rows, path):
     print(f"  wrote {path} ({len(rows) - 1:,} rows)")
 
 
-def main():
-    print(f"Seeding into {VOLUME_PATH}")
+def generate_all(catalog):
+    """Seed all datasets into /Volumes/{catalog}/raw/landing/{dataset}/{dataset}.csv."""
+    volume_path = f"/Volumes/{catalog}/raw/landing"
+    print(f"Seeding into {volume_path}")
     # Each dataset goes in its own subdirectory — Auto Loader (cloudFiles) requires
     # the `load()` argument to be a directory, not a file path.
     # Re-runs are safe: upload(overwrite=True) replaces CSVs in place, and the
@@ -195,9 +191,16 @@ def main():
         "inventory": gen_inventory(),
     }
     for name, rows in datasets.items():
-        _write_csv(rows, f"{VOLUME_PATH}/{name}/{name}.csv")
+        _write_csv(rows, f"{volume_path}/{name}/{name}.csv")
     print("Seed complete.")
 
 
+def _cli_main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--catalog", required=True)
+    args, _ = parser.parse_known_args()
+    generate_all(args.catalog)
+
+
 if __name__ == "__main__":
-    main()
+    _cli_main()

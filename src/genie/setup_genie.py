@@ -13,18 +13,6 @@ import argparse
 
 from databricks.sdk import WorkspaceClient
 
-_parser = argparse.ArgumentParser()
-_parser.add_argument("--catalog", required=True)
-_parser.add_argument("--warehouse-id", required=True)
-_args, _ = _parser.parse_known_args()
-CATALOG = _args.catalog
-WAREHOUSE_ID = _args.warehouse_id
-TITLE = f"PartsSource — Supply Chain Intelligence ({CATALOG})"
-DESCRIPTION = (
-    "Natural-language analytics over PartsSource operations: suppliers, "
-    "demand, pricing, reorder recommendations. Governed by Unity Catalog "
-    "metric views."
-)
 
 INSTRUCTIONS = """\
 You are an analyst helping PartsSource operations + procurement teams.
@@ -60,14 +48,22 @@ SAMPLE_QUESTIONS = [
 ]
 
 
-def _run():
-    w = WorkspaceClient()
+def run_genie_setup(catalog, warehouse_id):
+    """Create or update the PartsSource Genie space. Fail-soft on SDK drift."""
+    title = f"PartsSource — Supply Chain Intelligence ({catalog})"
+    description = (
+        "Natural-language analytics over PartsSource operations: suppliers, "
+        "demand, pricing, reorder recommendations. Governed by Unity Catalog "
+        "metric views."
+    )
     tables = [
-        f"{CATALOG}.gold.mv_supplier_spend",
-        f"{CATALOG}.gold.mv_part_demand",
-        f"{CATALOG}.gold.mv_pricing_benchmark",
-        f"{CATALOG}.gold.mv_reorder_needed",
+        f"{catalog}.gold.mv_supplier_spend",
+        f"{catalog}.gold.mv_part_demand",
+        f"{catalog}.gold.mv_pricing_benchmark",
+        f"{catalog}.gold.mv_reorder_needed",
     ]
+
+    w = WorkspaceClient()
     genie = getattr(w, "genie", None)
     if genie is None:
         print("[warn] WorkspaceClient has no `genie` attribute in this SDK version.")
@@ -82,7 +78,7 @@ def _run():
     if callable(list_fn):
         try:
             for space in list_fn():
-                if getattr(space, "title", None) == TITLE:
+                if getattr(space, "title", None) == title:
                     existing = space
                     break
         except Exception as e:
@@ -93,9 +89,9 @@ def _run():
             print(f"Updating Genie space: {existing.space_id}")
             update_fn(
                 space_id=existing.space_id,
-                title=TITLE,
-                description=DESCRIPTION,
-                warehouse_id=WAREHOUSE_ID,
+                title=title,
+                description=description,
+                warehouse_id=warehouse_id,
                 tables=tables,
                 instructions=INSTRUCTIONS,
                 sample_questions=SAMPLE_QUESTIONS,
@@ -104,9 +100,9 @@ def _run():
         elif callable(create_fn):
             print("Creating Genie space")
             resp = create_fn(
-                title=TITLE,
-                description=DESCRIPTION,
-                warehouse_id=WAREHOUSE_ID,
+                title=title,
+                description=description,
+                warehouse_id=warehouse_id,
                 tables=tables,
                 instructions=INSTRUCTIONS,
                 sample_questions=SAMPLE_QUESTIONS,
@@ -120,5 +116,13 @@ def _run():
         print("Continuing — create the Genie space manually via the UI pointing at gold.mv_* views.")
 
 
+def _cli_main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--catalog", required=True)
+    parser.add_argument("--warehouse-id", required=True)
+    args, _ = parser.parse_known_args()
+    run_genie_setup(args.catalog, args.warehouse_id)
+
+
 if __name__ == "__main__":
-    _run()
+    _cli_main()

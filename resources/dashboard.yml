@@ -1,0 +1,7 @@
+resources:
+  dashboards:
+    partssource_ops:
+      display_name: "PartsSource — Operations Overview"
+      file_path: ../src/dashboard/partssource_ops.lvdash.json
+      warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
+      parent_path: /Workspace/Users/${var.workspace_user}/dashboards

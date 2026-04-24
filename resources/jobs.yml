@@ -1,0 +1,81 @@
+resources:
+  jobs:
+    partssource_setup:
+      name: partssource-setup-${bundle.target}
+      description: "One-shot job: seed data → medallion pipeline → governance → metric views → Genie"
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: warehouse_id
+          default: ${resources.sql_warehouses.partssource_wh.id}
+      tasks:
+        - task_key: create_namespaces
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
+            file:
+              path: ../src/setup/create_namespaces.sql
+            parameters:
+              catalog: "{{job.parameters.catalog}}"
+          description: "Create catalog, schemas (raw/pipeline/gold/reverse_etl), and landing volume"
+
+        - task_key: seed_data
+          depends_on:
+            - task_key: create_namespaces
+          environment_key: setup_env
+          spark_python_task:
+            python_file: ../src/seed/generate_data.py
+            parameters:
+              - "--catalog"
+              - "{{job.parameters.catalog}}"
+          description: "Generate synthetic CSVs into /Volumes/<catalog>/raw/landing"
+
+        - task_key: run_pipeline
+          depends_on:
+            - task_key: seed_data
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.partssource_medallion.id}
+            full_refresh: true
+          description: "Lakeflow Declarative pipeline: bronze → silver → gold + reverse_etl"
+
+        - task_key: apply_governance
+          depends_on:
+            - task_key: run_pipeline
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
+            file:
+              path: ../src/governance/apply_governance.sql
+            parameters:
+              catalog: "{{job.parameters.catalog}}"
+          description: "UC grants, PII tags, column masks, certification tags"
+
+        - task_key: build_metric_views
+          depends_on:
+            - task_key: apply_governance
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
+            file:
+              path: ../src/semantics/metric_views.sql
+            parameters:
+              catalog: "{{job.parameters.catalog}}"
+          description: "Certified metric views on gold"
+
+        - task_key: setup_genie
+          depends_on:
+            - task_key: build_metric_views
+          environment_key: setup_env
+          spark_python_task:
+            python_file: ../src/genie/setup_genie.py
+            parameters:
+              - "--catalog"
+              - "{{job.parameters.catalog}}"
+              - "--warehouse-id"
+              - "{{job.parameters.warehouse_id}}"
+          description: "Create/update Genie space against gold.mv_* views"
+
+      environments:
+        - environment_key: setup_env
+          spec:
+            client: "2"
+            dependencies:
+              - databricks-sdk>=0.30.0

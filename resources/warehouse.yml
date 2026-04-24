@@ -1,0 +1,14 @@
+resources:
+  sql_warehouses:
+    partssource_wh:
+      name: ${var.warehouse_name}
+      cluster_size: "Small"
+      warehouse_type: PRO
+      enable_serverless_compute: true
+      auto_stop_mins: 10
+      max_num_clusters: 1
+      min_num_clusters: 1
+      tags:
+        custom_tags:
+          - key: project
+            value: partssource-unified-demo

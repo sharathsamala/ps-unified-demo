@@ -1,0 +1,120 @@
+{
+  "datasets": [
+    {
+      "name": "supplier_spend",
+      "displayName": "Supplier Spend",
+      "queryLines": [
+        "SELECT supplier_name, region, tier, composite_score, total_spend_usd, on_time_rate, defect_rate_ppm\n",
+        "FROM IDENTIFIER(:catalog || '.gold.mv_supplier_spend')\n",
+        "ORDER BY total_spend_usd DESC\n",
+        "LIMIT 50"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    },
+    {
+      "name": "reorder_needed",
+      "displayName": "Parts at Reorder Point",
+      "queryLines": [
+        "SELECT part_name, category, warehouse, on_hand_qty, reorder_point, recommended_supplier_name, avg_paid_usd\n",
+        "FROM IDENTIFIER(:catalog || '.gold.mv_reorder_needed')\n",
+        "ORDER BY on_hand_qty ASC\n",
+        "LIMIT 100"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    },
+    {
+      "name": "pricing_benchmark",
+      "displayName": "Pricing Benchmark — Savings Opportunities",
+      "queryLines": [
+        "SELECT part_name, category, manufacturer, list_price_usd, avg_paid_usd, savings_vs_list_pct\n",
+        "FROM IDENTIFIER(:catalog || '.gold.mv_pricing_benchmark')\n",
+        "WHERE savings_vs_list_pct IS NOT NULL\n",
+        "ORDER BY savings_vs_list_pct DESC\n",
+        "LIMIT 100"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    },
+    {
+      "name": "part_demand",
+      "displayName": "Monthly Part Demand",
+      "queryLines": [
+        "SELECT category, month, SUM(work_orders) AS work_orders\n",
+        "FROM IDENTIFIER(:catalog || '.gold.mv_part_demand')\n",
+        "GROUP BY category, month\n",
+        "ORDER BY month"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "ops_overview",
+      "displayName": "PartsSource — Operations Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "header_md",
+            "textbox_spec": "# PartsSource — Unified Operations\n\nSingle-pane view of suppliers, demand, pricing, and reorder needs. Built on Lakeflow Declarative medallion + Unity Catalog. Governed by metric views; queryable in natural language via Genie."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "reorder_table",
+            "queries": [{ "name": "main", "query": { "datasetName": "reorder_needed", "disaggregated": true } }],
+            "spec": { "version": 1, "widgetType": "table", "encodings": {} }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "demand_chart",
+            "queries": [{ "name": "main", "query": { "datasetName": "part_demand" } }],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": { "fieldName": "month", "scale": { "type": "temporal" }, "displayName": "Month" },
+                "y": { "fieldName": "work_orders", "scale": { "type": "quantitative" }, "displayName": "Work Orders" },
+                "color": { "fieldName": "category", "scale": { "type": "categorical" }, "displayName": "Category" }
+              }
+            }
+          },
+          "position": { "x": 0, "y": 8, "width": 3, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "supplier_bar",
+            "queries": [{ "name": "main", "query": { "datasetName": "supplier_spend" } }],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "supplier_name", "scale": { "type": "categorical" }, "displayName": "Supplier" },
+                "y": { "fieldName": "total_spend_usd", "scale": { "type": "quantitative" }, "displayName": "Spend (USD)" },
+                "color": { "fieldName": "tier", "scale": { "type": "categorical" } }
+              }
+            }
+          },
+          "position": { "x": 3, "y": 8, "width": 3, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "pricing_table",
+            "queries": [{ "name": "main", "query": { "datasetName": "pricing_benchmark", "disaggregated": true } }],
+            "spec": { "version": 1, "widgetType": "table", "encodings": {} }
+          },
+          "position": { "x": 0, "y": 13, "width": 6, "height": 6 }
+        }
+      ]
+    }
+  ]
+}

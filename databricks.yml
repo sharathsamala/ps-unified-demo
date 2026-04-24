@@ -1,0 +1,32 @@
+bundle:
+  name: partssource-unified
+
+variables:
+  catalog:
+    description: Unity Catalog for PartsSource demo data
+    default: partssource_demo
+  workspace_user:
+    description: Owner for created assets (auto-detected from deploy context)
+    default: ${workspace.current_user.userName}
+  warehouse_name:
+    description: Serverless SQL warehouse name used by dashboard + metric views
+    default: partssource-demo-wh
+
+include:
+  - resources/*.yml
+
+# Workspace host is NOT hardcoded — deploy picks it up from:
+#   - DATABRICKS_HOST env var, OR
+#   - --profile flag (databricks bundle deploy --profile <name>), OR
+#   - notebook runtime context (when run via install.py notebook)
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      catalog: partssource_demo_dev
+
+  demo:
+    mode: production
+    variables:
+      catalog: partssource_demo

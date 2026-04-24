@@ -1,0 +1,8 @@
+# Catalog/schema/volume creation is handled by the `create_namespaces` SQL task
+# at the start of the setup job. See src/setup/create_namespaces.sql.
+#
+# Reason: DAB catalog resources require an explicit storage_root on workspaces
+# using Default Storage (or on some metastores with no default managed location).
+# Creating via SQL via the SQL warehouse is environment-agnostic.
+
+# (Intentionally empty — kept for include-glob consistency and discoverability.)

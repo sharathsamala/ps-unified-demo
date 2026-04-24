@@ -1,12 +1,10 @@
 """
 Create or update the PartsSource Genie space.
 
-Genie spaces don't have a first-class DAB resource yet, so we provision via the
+Genie spaces don't have a first-class DAB resource, so we provision via the
 Databricks SDK. Idempotent: if a space with the same title exists, it's updated.
-
-Note on SDK drift: the `w.genie.*` surface is still evolving. If any call
-raises, we log a warning and return cleanly so the job still succeeds — the
-customer can create the space manually via the UI.
+Fail-soft: if the SDK's genie surface has drifted, we log a warning and return
+cleanly so the job still succeeds.
 """
 
 import argparse
@@ -15,59 +13,62 @@ from databricks.sdk import WorkspaceClient
 
 
 INSTRUCTIONS = """\
-You are an analyst helping PartsSource operations + procurement teams.
+You are an analyst helping PartsSource operations, procurement, and service teams.
 
-Use only the certified metric views in the `gold` schema. Prefer:
-- mv_supplier_spend      — supplier performance, spend, on-time rate, composite score
-- mv_part_demand         — monthly work-order volume per part / category
-- mv_pricing_benchmark   — list vs paid price, savings opportunities
-- mv_reorder_needed      — parts at/below reorder point + recommended supplier
+Use only the certified metric views in the `business_metrics` schema. Each view
+maps to a business domain:
+  - mv_supplier_spend     (suppliers)   supplier spend, on-time rate, composite score
+  - mv_pricing_benchmark  (parts)       list vs paid pricing, savings opportunities
+  - mv_reorder_needed     (parts)       parts at or below reorder point per warehouse
+  - mv_part_demand        (service_ops) monthly work-order volume per part
+  - mv_sla_performance    (service_ops) SLA attainment by priority
 
 Key terms:
-- "Composite score" = 0.6 × on-time rate + 0.4 × (1 − defect_rate_ppm / 5000). Higher is better.
-- "Reorder point" = threshold below which stock is replenished.
-- "Savings vs list" = (list_price − avg_paid) / list_price. Negative means overpaying.
-- "Tier" of a supplier: Preferred > Approved > Probation.
+- "Composite score" = 0.6 * on_time_rate + 0.4 * (1 - defect_rate_ppm / 5000).
+- "Reorder point" = threshold below which a warehouse replenishes stock.
+- "Savings vs list" = (list_price - avg_paid) / list_price. Negative means overpaying.
+- "Tier" order: Preferred > Approved > Probation.
+- "SLA target": P1 = 48h, P2 = 120h, P3/P4 = 240h. sla_pct is (met / closed).
 
 Style:
 - Be concise. Prefer small tables to long prose.
-- When a question is ambiguous (e.g. "top suppliers"), ask once what metric
-  ("spend", "on-time rate", "composite score") before querying.
-- Do not query bronze or silver schemas directly — only gold metric views.
+- When ambiguous ("top suppliers"), ask once: by spend, on-time rate, or composite?
+- Never query bronze or silver schemas directly — only `business_metrics.mv_*`.
 """
 
 SAMPLE_QUESTIONS = [
     "Top 10 suppliers by total spend",
-    "Which parts are below reorder point right now?",
-    "Trend of work orders per month by category",
-    "Which suppliers have the best on-time rate above $50k spend?",
-    "Parts where we're paying >20% below list price",
-    "Work-order volume for Imaging vs Cardiology last 3 months",
-    "Suppliers with defect rate > 2000 PPM",
-    "Recommended supplier for each reorder-needed part in the CHI-02 warehouse",
+    "Which parts are below reorder point in warehouse CHI-02?",
+    "Parts where we're paying more than 20% below list price",
+    "Trend of work orders per month for the Imaging category",
+    "Suppliers with defect rate over 2000 PPM and spend above $50k",
+    "SLA attainment by priority last quarter",
+    "Estimated reorder value by warehouse right now",
+    "Average work order duration per priority",
 ]
 
 
 def run_genie_setup(catalog, warehouse_id):
-    """Create or update the PartsSource Genie space. Fail-soft on SDK drift."""
+    """Create or update the Genie space. Fail-soft on SDK drift."""
     title = f"PartsSource — Supply Chain Intelligence ({catalog})"
     description = (
         "Natural-language analytics over PartsSource operations: suppliers, "
-        "demand, pricing, reorder recommendations. Governed by Unity Catalog "
-        "metric views."
+        "parts, and service. Governed by Unity Catalog metric views in "
+        "`business_metrics`."
     )
     tables = [
-        f"{catalog}.gold.mv_supplier_spend",
-        f"{catalog}.gold.mv_part_demand",
-        f"{catalog}.gold.mv_pricing_benchmark",
-        f"{catalog}.gold.mv_reorder_needed",
+        f"{catalog}.business_metrics.mv_supplier_spend",
+        f"{catalog}.business_metrics.mv_pricing_benchmark",
+        f"{catalog}.business_metrics.mv_reorder_needed",
+        f"{catalog}.business_metrics.mv_part_demand",
+        f"{catalog}.business_metrics.mv_sla_performance",
     ]
 
     w = WorkspaceClient()
     genie = getattr(w, "genie", None)
     if genie is None:
         print("[warn] WorkspaceClient has no `genie` attribute in this SDK version.")
-        print("Create the Genie space manually in the UI pointing at gold.mv_* views.")
+        print("Create the Genie space manually in the UI pointing at business_metrics.mv_*.")
         return
 
     list_fn = getattr(genie, "list_spaces", None)
@@ -109,11 +110,11 @@ def run_genie_setup(catalog, warehouse_id):
             )
             print(f"Created: {getattr(resp, 'space_id', '<no id>')}")
         else:
-            print("[warn] Genie SDK does not expose create_space/update_space in this version.")
-            print("Create the Genie space manually in the UI pointing at gold.mv_* views.")
+            print("[warn] Genie SDK does not expose create_space/update_space.")
+            print("Create the Genie space manually pointing at business_metrics.mv_*.")
     except Exception as e:
         print(f"[warn] Genie setup failed: {e}")
-        print("Continuing — create the Genie space manually via the UI pointing at gold.mv_* views.")
+        print("Continuing — create the Genie space manually pointing at business_metrics.mv_*.")
 
 
 def _cli_main():

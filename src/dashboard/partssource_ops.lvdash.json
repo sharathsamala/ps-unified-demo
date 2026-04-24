@@ -1,11 +1,27 @@
 {
   "datasets": [
     {
+      "name": "exec_kpis",
+      "displayName": "Executive KPIs",
+      "queryLines": [
+        "SELECT\n",
+        "  (SELECT COUNT(*) FROM IDENTIFIER(:catalog || '.suppliers.gold_supplier_performance')) AS suppliers,\n",
+        "  (SELECT ROUND(SUM(total_spend_usd), 0) FROM IDENTIFIER(:catalog || '.suppliers.gold_supplier_performance')) AS total_spend_usd,\n",
+        "  (SELECT COUNT(*) FROM IDENTIFIER(:catalog || '.parts.gold_reorder_needed')) AS reorder_needed,\n",
+        "  (SELECT SUM(work_orders) FROM IDENTIFIER(:catalog || '.service_ops.gold_work_order_volume')) AS total_work_orders,\n",
+        "  (SELECT ROUND(AVG(sla_pct) * 100, 1) FROM IDENTIFIER(:catalog || '.service_ops.gold_sla_performance')) AS avg_sla_pct\n"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    },
+    {
       "name": "supplier_spend",
       "displayName": "Supplier Spend",
       "queryLines": [
         "SELECT supplier_name, region, tier, composite_score, total_spend_usd, on_time_rate, defect_rate_ppm\n",
-        "FROM IDENTIFIER(:catalog || '.gold.mv_supplier_spend')\n",
+        "FROM IDENTIFIER(:catalog || '.suppliers.gold_supplier_performance')\n",
+        "WHERE total_spend_usd IS NOT NULL\n",
         "ORDER BY total_spend_usd DESC\n",
         "LIMIT 50"
       ],
@@ -14,12 +30,25 @@
       ]
     },
     {
-      "name": "reorder_needed",
-      "displayName": "Parts at Reorder Point",
+      "name": "spend_by_region",
+      "displayName": "Spend by Region & Tier",
       "queryLines": [
-        "SELECT part_name, category, warehouse, on_hand_qty, reorder_point, recommended_supplier_name, avg_paid_usd\n",
-        "FROM IDENTIFIER(:catalog || '.gold.mv_reorder_needed')\n",
-        "ORDER BY on_hand_qty ASC\n",
+        "SELECT region, tier, total_spend_usd, supplier_count, avg_composite_score\n",
+        "FROM IDENTIFIER(:catalog || '.suppliers.gold_spend_by_region')\n",
+        "ORDER BY total_spend_usd DESC"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    },
+    {
+      "name": "reorder_needed",
+      "displayName": "Reorder List",
+      "queryLines": [
+        "SELECT part_name, category, manufacturer, warehouse, on_hand_qty, reorder_point, shortfall_qty, list_price_usd,\n",
+        "       ROUND(shortfall_qty * list_price_usd, 2) AS est_reorder_value_usd\n",
+        "FROM IDENTIFIER(:catalog || '.parts.gold_reorder_needed')\n",
+        "ORDER BY shortfall_qty DESC\n",
         "LIMIT 100"
       ],
       "parameters": [
@@ -28,10 +57,10 @@
     },
     {
       "name": "pricing_benchmark",
-      "displayName": "Pricing Benchmark — Savings Opportunities",
+      "displayName": "Pricing Benchmark",
       "queryLines": [
         "SELECT part_name, category, manufacturer, list_price_usd, avg_paid_usd, savings_vs_list_pct\n",
-        "FROM IDENTIFIER(:catalog || '.gold.mv_pricing_benchmark')\n",
+        "FROM IDENTIFIER(:catalog || '.parts.gold_part_pricing_benchmark')\n",
         "WHERE savings_vs_list_pct IS NOT NULL\n",
         "ORDER BY savings_vs_list_pct DESC\n",
         "LIMIT 100"
@@ -41,13 +70,40 @@
       ]
     },
     {
-      "name": "part_demand",
-      "displayName": "Monthly Part Demand",
+      "name": "work_order_volume",
+      "displayName": "Work Orders by Month & Priority",
       "queryLines": [
-        "SELECT category, month, SUM(work_orders) AS work_orders\n",
-        "FROM IDENTIFIER(:catalog || '.gold.mv_part_demand')\n",
-        "GROUP BY category, month\n",
-        "ORDER BY month"
+        "SELECT month, priority, SUM(work_orders) AS work_orders\n",
+        "FROM IDENTIFIER(:catalog || '.service_ops.gold_work_order_volume')\n",
+        "WHERE status = 'closed'\n",
+        "GROUP BY month, priority\n",
+        "ORDER BY month, priority"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    },
+    {
+      "name": "sla_performance",
+      "displayName": "SLA Attainment",
+      "queryLines": [
+        "SELECT priority, closed_orders, orders_meeting_sla, ROUND(sla_pct * 100, 1) AS sla_pct_display, avg_duration_hours\n",
+        "FROM IDENTIFIER(:catalog || '.service_ops.gold_sla_performance')\n",
+        "ORDER BY priority"
+      ],
+      "parameters": [
+        { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
+      ]
+    },
+    {
+      "name": "part_demand_top",
+      "displayName": "Top Parts by Monthly Demand",
+      "queryLines": [
+        "SELECT d.part_id, p.part_name, p.category, d.month, d.work_orders, d.avg_duration_hours\n",
+        "FROM IDENTIFIER(:catalog || '.service_ops.gold_part_demand_monthly') d\n",
+        "JOIN IDENTIFIER(:catalog || '.parts.silver_parts') p USING (part_id)\n",
+        "ORDER BY d.work_orders DESC\n",
+        "LIMIT 200"
       ],
       "parameters": [
         { "displayName": "catalog", "keyword": "catalog", "dataType": "STRING", "defaultSelection": { "values": { "dataType": "STRING", "values": [{ "value": "partssource_demo" }] } } }
@@ -56,13 +112,137 @@
   ],
   "pages": [
     {
-      "name": "ops_overview",
-      "displayName": "PartsSource — Operations Overview",
+      "name": "executive",
+      "displayName": "Executive",
       "layout": [
         {
           "widget": {
-            "name": "header_md",
-            "textbox_spec": "# PartsSource — Unified Operations\n\nSingle-pane view of suppliers, demand, pricing, and reorder needs. Built on Lakeflow Declarative medallion + Unity Catalog. Governed by metric views; queryable in natural language via Genie."
+            "name": "exec_header",
+            "textbox_spec": "# PartsSource — Executive Overview\n\nCross-domain KPIs across Suppliers, Parts, and Service Ops. Powered by the Lakehouse medallion + Unity Catalog metric views. Ask Genie for any cut not shown here."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "kpi_suppliers",
+            "queries": [{ "name": "main", "query": { "datasetName": "exec_kpis" } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "suppliers", "displayName": "Suppliers" } } }
+          },
+          "position": { "x": 0, "y": 2, "width": 1, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "kpi_spend",
+            "queries": [{ "name": "main", "query": { "datasetName": "exec_kpis" } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_spend_usd", "displayName": "Total Spend $", "format": { "type": "number-currency", "currencyCode": "USD" } } } }
+          },
+          "position": { "x": 1, "y": 2, "width": 2, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "kpi_reorder",
+            "queries": [{ "name": "main", "query": { "datasetName": "exec_kpis" } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "reorder_needed", "displayName": "Parts below reorder" } } }
+          },
+          "position": { "x": 3, "y": 2, "width": 1, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "kpi_wos",
+            "queries": [{ "name": "main", "query": { "datasetName": "exec_kpis" } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "total_work_orders", "displayName": "Work Orders" } } }
+          },
+          "position": { "x": 4, "y": 2, "width": 1, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "kpi_sla",
+            "queries": [{ "name": "main", "query": { "datasetName": "exec_kpis" } }],
+            "spec": { "version": 2, "widgetType": "counter", "encodings": { "value": { "fieldName": "avg_sla_pct", "displayName": "Avg SLA %" } } }
+          },
+          "position": { "x": 5, "y": 2, "width": 1, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "exec_wo_trend",
+            "queries": [{ "name": "main", "query": { "datasetName": "work_order_volume" } }],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": { "fieldName": "month", "scale": { "type": "temporal" }, "displayName": "Month" },
+                "y": { "fieldName": "work_orders", "scale": { "type": "quantitative" }, "displayName": "Work Orders" },
+                "color": { "fieldName": "priority", "scale": { "type": "categorical" }, "displayName": "Priority" }
+              }
+            }
+          },
+          "position": { "x": 0, "y": 4, "width": 6, "height": 5 }
+        }
+      ]
+    },
+
+    {
+      "name": "supply_chain",
+      "displayName": "Supply Chain",
+      "layout": [
+        {
+          "widget": {
+            "name": "sc_header",
+            "textbox_spec": "# Supply Chain\n\nSupplier spend, on-time rate, and regional mix. Composite score = 0.6 × on-time + 0.4 × (1 − defect_rate / 5000)."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "top_suppliers_bar",
+            "queries": [{ "name": "main", "query": { "datasetName": "supplier_spend" } }],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "supplier_name", "scale": { "type": "categorical" }, "displayName": "Supplier" },
+                "y": { "fieldName": "total_spend_usd", "scale": { "type": "quantitative" }, "displayName": "Spend ($)" },
+                "color": { "fieldName": "tier", "scale": { "type": "categorical" } }
+              }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "region_heatmap",
+            "queries": [{ "name": "main", "query": { "datasetName": "spend_by_region" } }],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "region", "scale": { "type": "categorical" }, "displayName": "Region" },
+                "y": { "fieldName": "total_spend_usd", "scale": { "type": "quantitative" }, "displayName": "Spend ($)" },
+                "color": { "fieldName": "tier", "scale": { "type": "categorical" } }
+              }
+            }
+          },
+          "position": { "x": 0, "y": 8, "width": 3, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "supplier_table",
+            "queries": [{ "name": "main", "query": { "datasetName": "supplier_spend", "disaggregated": true } }],
+            "spec": { "version": 1, "widgetType": "table", "encodings": {} }
+          },
+          "position": { "x": 3, "y": 8, "width": 3, "height": 5 }
+        }
+      ]
+    },
+
+    {
+      "name": "parts_inventory",
+      "displayName": "Parts & Inventory",
+      "layout": [
+        {
+          "widget": {
+            "name": "pi_header",
+            "textbox_spec": "# Parts & Inventory\n\nReorder-needed list, pricing benchmark (list vs paid), and savings opportunities across warehouses."
           },
           "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
         },
@@ -76,43 +256,57 @@
         },
         {
           "widget": {
-            "name": "demand_chart",
-            "queries": [{ "name": "main", "query": { "datasetName": "part_demand" } }],
+            "name": "pricing_table",
+            "queries": [{ "name": "main", "query": { "datasetName": "pricing_benchmark", "disaggregated": true } }],
+            "spec": { "version": 1, "widgetType": "table", "encodings": {} }
+          },
+          "position": { "x": 0, "y": 8, "width": 6, "height": 6 }
+        }
+      ]
+    },
+
+    {
+      "name": "service_ops",
+      "displayName": "Service Ops",
+      "layout": [
+        {
+          "widget": {
+            "name": "so_header",
+            "textbox_spec": "# Service Ops\n\nWork-order volume, SLA attainment by priority, and top parts driving demand. SLA targets: P1 = 48h, P2 = 120h, P3/P4 = 240h."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "sla_table",
+            "queries": [{ "name": "main", "query": { "datasetName": "sla_performance", "disaggregated": true } }],
+            "spec": { "version": 1, "widgetType": "table", "encodings": {} }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 4 }
+        },
+        {
+          "widget": {
+            "name": "wo_month_chart",
+            "queries": [{ "name": "main", "query": { "datasetName": "work_order_volume" } }],
             "spec": {
               "version": 3,
               "widgetType": "line",
               "encodings": {
                 "x": { "fieldName": "month", "scale": { "type": "temporal" }, "displayName": "Month" },
                 "y": { "fieldName": "work_orders", "scale": { "type": "quantitative" }, "displayName": "Work Orders" },
-                "color": { "fieldName": "category", "scale": { "type": "categorical" }, "displayName": "Category" }
+                "color": { "fieldName": "priority", "scale": { "type": "categorical" } }
               }
             }
           },
-          "position": { "x": 0, "y": 8, "width": 3, "height": 5 }
+          "position": { "x": 0, "y": 6, "width": 6, "height": 5 }
         },
         {
           "widget": {
-            "name": "supplier_bar",
-            "queries": [{ "name": "main", "query": { "datasetName": "supplier_spend" } }],
-            "spec": {
-              "version": 3,
-              "widgetType": "bar",
-              "encodings": {
-                "x": { "fieldName": "supplier_name", "scale": { "type": "categorical" }, "displayName": "Supplier" },
-                "y": { "fieldName": "total_spend_usd", "scale": { "type": "quantitative" }, "displayName": "Spend (USD)" },
-                "color": { "fieldName": "tier", "scale": { "type": "categorical" } }
-              }
-            }
-          },
-          "position": { "x": 3, "y": 8, "width": 3, "height": 5 }
-        },
-        {
-          "widget": {
-            "name": "pricing_table",
-            "queries": [{ "name": "main", "query": { "datasetName": "pricing_benchmark", "disaggregated": true } }],
+            "name": "demand_top_table",
+            "queries": [{ "name": "main", "query": { "datasetName": "part_demand_top", "disaggregated": true } }],
             "spec": { "version": 1, "widgetType": "table", "encodings": {} }
           },
-          "position": { "x": 0, "y": 13, "width": 6, "height": 6 }
+          "position": { "x": 0, "y": 11, "width": 6, "height": 6 }
         }
       ]
     }

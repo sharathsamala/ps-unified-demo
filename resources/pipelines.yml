@@ -1,0 +1,67 @@
+resources:
+  pipelines:
+    # -------- suppliers domain --------
+    suppliers_pipeline:
+      name: partssource-suppliers-${bundle.target}
+      catalog: ${var.catalog}
+      schema: suppliers
+      serverless: true
+      channel: PREVIEW
+      photon: true
+      edition: ADVANCED
+      continuous: false
+      libraries:
+        - file:
+            path: ../src/pipeline/_shared.py
+        - file:
+            path: ../src/pipeline/suppliers/bronze.py
+        - file:
+            path: ../src/pipeline/suppliers/silver.py
+        - file:
+            path: ../src/pipeline/suppliers/gold.py
+      configuration:
+        ps.catalog: ${var.catalog}
+
+    # -------- parts domain --------
+    parts_pipeline:
+      name: partssource-parts-${bundle.target}
+      catalog: ${var.catalog}
+      schema: parts
+      serverless: true
+      channel: PREVIEW
+      photon: true
+      edition: ADVANCED
+      continuous: false
+      libraries:
+        - file:
+            path: ../src/pipeline/_shared.py
+        - file:
+            path: ../src/pipeline/parts/bronze.py
+        - file:
+            path: ../src/pipeline/parts/silver.py
+        - file:
+            path: ../src/pipeline/parts/gold.py
+      configuration:
+        ps.catalog: ${var.catalog}
+
+    # -------- service_ops domain --------
+    service_ops_pipeline:
+      name: partssource-service-ops-${bundle.target}
+      catalog: ${var.catalog}
+      schema: service_ops
+      serverless: true
+      channel: PREVIEW
+      photon: true
+      edition: ADVANCED
+      continuous: false
+      libraries:
+        - file:
+            path: ../src/pipeline/_shared.py
+        - file:
+            path: ../src/pipeline/service_ops/bronze.py
+        - file:
+            path: ../src/pipeline/service_ops/silver.py
+        - file:
+            path: ../src/pipeline/service_ops/gold.py
+      configuration:
+        ps.catalog: ${var.catalog}

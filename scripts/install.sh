@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# One-shot installer for the PartsSource Unified DAB.
-# Usage:
-#   ./scripts/install.sh                  # deploys to `demo` target + runs setup job
-#   ./scripts/install.sh dev              # deploys to `dev` target + runs setup job
-#   ./scripts/install.sh demo --deploy-only   # skip running the setup job
+# CLI installer for the PartsSource Unified DAB. Kept as an alternative path;
+# the default customer flow is "Deploy bundle" from the Databricks workspace UI.
 #
-# Prereqs: Databricks CLI v0.240+ authenticated (databricks auth login).
-#   Optionally export DATABRICKS_CONFIG_PROFILE to pick a specific profile.
+# Usage:
+#   ./scripts/install.sh             # deploys `demo` target + runs the setup job
+#   ./scripts/install.sh dev         # deploys `dev` target + runs the setup job
+#   ./scripts/install.sh demo --deploy-only
+#
+# Prereqs: Databricks CLI v0.240+ (databricks auth login).
 
 set -euo pipefail
 
@@ -16,7 +17,6 @@ if [[ "${2:-}" == "--deploy-only" ]]; then
   RUN_JOB=0
 fi
 
-# Derive the catalog name the same way the bundle does.
 case "$TARGET" in
   dev)  CATALOG="partssource_demo_dev" ;;
   demo) CATALOG="partssource_demo" ;;
@@ -28,21 +28,14 @@ export DATABRICKS_BUNDLE_ENGINE=direct
 echo "==> Validating bundle"
 databricks bundle validate --target "$TARGET"
 
-# --------------------------------------------------------------------------
-# Bootstrap: create the catalog BEFORE deploy.
-# The pipeline resource is validated against UC at deploy time, so the catalog
-# must already exist. On Default Storage workspaces the Catalog REST API refuses
-# to create without an explicit MANAGED LOCATION, but SQL via a warehouse works.
-# --------------------------------------------------------------------------
-echo "==> Ensuring catalog '$CATALOG' exists (pre-deploy bootstrap)"
-
-# Pick any running/available serverless warehouse. Fall back to the first one.
+# Bootstrap catalog before deploy — the job's create_namespaces task handles this
+# at runtime, but any pipeline referencing the catalog validates at deploy time.
+echo "==> Ensuring catalog '$CATALOG' exists"
 WAREHOUSE_ID="$(
   databricks warehouses list --output json 2>/dev/null \
     | python3 -c '
 import json, sys
 whs = json.load(sys.stdin)
-# Prefer serverless + running
 for w in whs:
     if w.get("enable_serverless_compute") and w.get("state") == "RUNNING":
         print(w["id"]); break
@@ -56,11 +49,10 @@ else:
 )"
 
 if [[ -z "$WAREHOUSE_ID" ]]; then
-  echo "  No SQL warehouse available for bootstrap. Create one in the UI, then re-run." >&2
+  echo "  No SQL warehouse available. Create a serverless warehouse in the UI, then re-run." >&2
   exit 1
 fi
 
-echo "  Using warehouse $WAREHOUSE_ID to run CREATE CATALOG IF NOT EXISTS"
 databricks api post /api/2.0/sql/statements \
   --json "{\"warehouse_id\":\"$WAREHOUSE_ID\",\"statement\":\"CREATE CATALOG IF NOT EXISTS $CATALOG COMMENT 'PartsSource unified demo'\",\"wait_timeout\":\"30s\"}" \
   > /dev/null
@@ -69,14 +61,14 @@ echo "==> Deploying bundle to target: $TARGET"
 databricks bundle deploy --target "$TARGET"
 
 if [[ "$RUN_JOB" == "1" ]]; then
-  echo "==> Running setup job (create_namespaces → seed → pipeline → governance → metric views → Genie)"
+  echo "==> Running setup job"
   databricks bundle run partssource_setup --target "$TARGET"
   echo ""
-  echo "Setup complete. Open your workspace to see:"
-  echo "  - Catalog:    $CATALOG"
-  echo "  - Pipeline:   partssource-medallion-$TARGET"
+  echo "Setup complete. Open the workspace to see:"
+  echo "  - Catalog:    $CATALOG  (schemas: raw, suppliers, parts, service_ops, business_metrics, reverse_etl)"
+  echo "  - Pipelines:  partssource-suppliers-$TARGET / -parts-$TARGET / -service-ops-$TARGET"
   echo "  - Dashboard:  PartsSource — Operations Overview"
-  echo "  - Genie:      PartsSource — Supply Chain Intelligence"
+  echo "  - Genie:      PartsSource — Supply Chain Intelligence ($CATALOG)"
 else
   echo "==> Deploy-only mode; skipping job run"
   echo "To run later: databricks bundle run partssource_setup --target $TARGET"

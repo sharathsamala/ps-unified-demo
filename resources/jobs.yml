@@ -2,68 +2,162 @@ resources:
   jobs:
     partssource_setup:
       name: partssource-setup-${bundle.target}
-      description: "One-shot job: seed data → medallion pipeline → governance → metric views → Genie"
+      description: >-
+        End-to-end setup: namespaces → seed → 3 domain SDP pipelines → metric views →
+        governance → conditional reverse-ETL publish → Genie.
       max_concurrent_runs: 1
+
       parameters:
         - name: catalog
           default: ${var.catalog}
         - name: warehouse_id
           default: ${resources.sql_warehouses.partssource_wh.id}
+
+      # Single serverless environment version used by all Python + notebook tasks.
+      # Bump to the latest available version via `databricks bundle deploy` feedback.
+      environments:
+        - environment_key: serverless_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - databricks-sdk>=0.30.0
+
       tasks:
+        # ---- 1. Create namespaces ----------------------------------------------
         - task_key: create_namespaces
+          description: Create catalog, domain schemas, landing volume.
           sql_task:
             warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
             file:
               path: ../src/setup/create_namespaces.sql
             parameters:
               catalog: "{{job.parameters.catalog}}"
-          description: "Create catalog, schemas (raw/pipeline/gold/reverse_etl), and landing volume"
 
+        # ---- 2. Seed synthetic data -------------------------------------------
         - task_key: seed_data
+          description: Generate sharded CSV + JSON into /Volumes/<catalog>/raw/landing.
           depends_on:
             - task_key: create_namespaces
-          environment_key: setup_env
+          environment_key: serverless_env
           spark_python_task:
             python_file: ../src/seed/generate_data.py
             parameters:
               - "--catalog"
               - "{{job.parameters.catalog}}"
-          description: "Generate synthetic CSVs into /Volumes/<catalog>/raw/landing"
 
-        - task_key: run_pipeline
+        # ---- 3. Domain pipelines (suppliers first — parts cross-reads it) ----
+        - task_key: run_suppliers_pipeline
+          description: Suppliers domain — bronze/silver/gold with expectations.
           depends_on:
             - task_key: seed_data
           pipeline_task:
-            pipeline_id: ${resources.pipelines.partssource_medallion.id}
+            pipeline_id: ${resources.pipelines.suppliers_pipeline.id}
             full_refresh: true
-          description: "Lakeflow Declarative pipeline: bronze → silver → gold + reverse_etl"
 
-        - task_key: apply_governance
+        - task_key: run_parts_pipeline
+          description: Parts domain — depends on suppliers for pricing benchmark join.
           depends_on:
-            - task_key: run_pipeline
+            - task_key: run_suppliers_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.parts_pipeline.id}
+            full_refresh: true
+
+        - task_key: run_service_ops_pipeline
+          description: Service Ops — runs in parallel with parts.
+          depends_on:
+            - task_key: run_suppliers_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.service_ops_pipeline.id}
+            full_refresh: true
+
+        # ---- 4. Build certified Metric Views (YAML) in business_metrics -------
+        - task_key: build_metric_views
+          description: Compile 5 Metric Views on top of the domain gold tables.
+          depends_on:
+            - task_key: run_parts_pipeline
+            - task_key: run_service_ops_pipeline
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
+            file:
+              path: ../src/jobs/sql/build_metric_views.sql
+            parameters:
+              catalog: "{{job.parameters.catalog}}"
+
+        # ---- 5. Apply governance (PII tags + masks + certified tags) ----------
+        - task_key: apply_governance
+          description: UC tags, column masks, certified tags across silver + gold.
+          depends_on:
+            - task_key: build_metric_views
           sql_task:
             warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
             file:
               path: ../src/governance/apply_governance.sql
             parameters:
               catalog: "{{job.parameters.catalog}}"
-          description: "UC grants, PII tags, column masks, certification tags"
 
-        - task_key: build_metric_views
+        # ---- 6. Branch on reorder alerts --------------------------------------
+        - task_key: check_reorder_alerts
+          description: Count urgent reorders and emit `alert_count` task value.
           depends_on:
             - task_key: apply_governance
+          environment_key: serverless_env
+          notebook_task:
+            notebook_path: ../src/jobs/notebooks/check_reorder_alerts.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+
+        - task_key: alerts_branch
+          description: Route based on alert_count > 0.
+          depends_on:
+            - task_key: check_reorder_alerts
+          condition_task:
+            op: GREATER_THAN
+            left: "{{tasks.check_reorder_alerts.values.alert_count}}"
+            right: "0"
+
+        # ---- 7a. Alert-present branch: publish + notify -----------------------
+        - task_key: publish_reverse_etl
+          description: Rebuild reverse_etl.* tables for Lakebase/ops app sync.
+          depends_on:
+            - task_key: alerts_branch
+              outcome: "true"
           sql_task:
             warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
             file:
-              path: ../src/semantics/metric_views.sql
+              path: ../src/jobs/sql/publish_reverse_etl.sql
             parameters:
               catalog: "{{job.parameters.catalog}}"
-          description: "Certified metric views on gold"
 
-        - task_key: setup_genie
+        - task_key: notify_ops
+          description: Log the top reorder alerts (stand-in for Slack/PagerDuty).
           depends_on:
-            - task_key: build_metric_views
-          environment_key: setup_env
+            - task_key: publish_reverse_etl
+          environment_key: serverless_env
+          notebook_task:
+            notebook_path: ../src/jobs/notebooks/notify_ops.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+
+        # ---- 7b. Clean-run branch ---------------------------------------------
+        - task_key: log_clean_run
+          description: Log a health summary when there are no urgent alerts.
+          depends_on:
+            - task_key: alerts_branch
+              outcome: "false"
+          environment_key: serverless_env
+          notebook_task:
+            notebook_path: ../src/jobs/notebooks/log_clean_run.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+
+        # ---- 8. Genie setup (runs whichever branch completed) -----------------
+        - task_key: setup_genie
+          description: Create/update the Genie space pointed at business_metrics.mv_*.
+          depends_on:
+            - task_key: notify_ops
+            - task_key: log_clean_run
+          run_if: AT_LEAST_ONE_SUCCESS
+          environment_key: serverless_env
           spark_python_task:
             python_file: ../src/genie/setup_genie.py
             parameters:
@@ -71,11 +165,3 @@ resources:
               - "{{job.parameters.catalog}}"
               - "--warehouse-id"
               - "{{job.parameters.warehouse_id}}"
-          description: "Create/update Genie space against gold.mv_* views"
-
-      environments:
-        - environment_key: setup_env
-          spec:
-            client: "2"
-            dependencies:
-              - databricks-sdk>=0.30.0

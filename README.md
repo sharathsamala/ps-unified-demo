@@ -1,64 +1,75 @@
 # PartsSource Unified Demo
 
-A single Databricks Asset Bundle that stands up a complete, governed, AI-ready demo on any workspace in one click.
+A single Databricks Asset Bundle that stands up a governed, AI-ready Lakehouse demo on any workspace.
 
 **What you get:**
-- **Unity Catalog** — catalog + schemas (`raw`, `pipeline`, `gold`, `reverse_etl`), PII tags, dynamic column masks, certified-table tags
-- **Synthetic data** — ~50k parts, 200 suppliers, 1.5k customers, 25k work orders, 120k purchases, 35k inventory rows
-- **Spark Declarative Pipelines** — bronze → silver → gold medallion with inline data quality expectations
-- **Certified Metric Views** — `mv_supplier_spend`, `mv_part_demand`, `mv_pricing_benchmark`, `mv_reorder_needed`
-- **AI/BI Dashboard** — *PartsSource — Operations Overview*
-- **Genie Space** — natural-language analytics over the gold metric views, with curated instructions + sample questions
-- **Serverless SQL Warehouse** — auto-created, powers the dashboard + Genie
+- **Unity Catalog** — 6 schemas (`raw`, `suppliers`, `parts`, `service_ops`, `business_metrics`, `reverse_etl`), PII tags, column masks, certified-table tags
+- **Mixed-format raw zone** — CSV + JSON, sharded into multiple files per dataset (so Auto Loader behaves like production)
+- **Three domain SDP pipelines** (bronze → silver → gold) with **data-quality expectations** that catch injected defects
+- **Certified Metric Views** in `business_metrics` (`mv_supplier_spend`, `mv_pricing_benchmark`, `mv_reorder_needed`, `mv_part_demand`, `mv_sla_performance`)
+- **Orchestration job** demonstrating SQL tasks, pipeline tasks, notebook tasks, a condition task with branching, and reverse-ETL publication
+- **4-page AI/BI Dashboard** — Executive / Supply Chain / Parts & Inventory / Service Ops
+- **Genie Space** pointed at all 5 metric views, with curated instructions + sample questions
+- **Serverless SQL warehouse** — auto-created
 
 ---
 
-## Install — one click from a Databricks notebook (recommended)
+## Install — Deploy Bundle from the Databricks UI (recommended)
 
-1. In your Databricks workspace, go to **Workspace → Repos → Add repo**
-2. Paste the GitHub URL of this repo and clone
-3. Open `install.py` from the repo
-4. (Optional) Change the catalog name in the widget at the top
-5. Click **Run All**
+1. In your Databricks workspace: **Workspace → Repos → Add repo** → paste the GitHub URL of this repo and clone
+2. Open the repo folder. The workspace auto-detects `databricks.yml` and shows the **Bundle** side panel (right side)
+3. Click **Deploy bundle**. Pick the `demo` target (or `dev` for an isolated `partssource_demo_dev` catalog)
+4. Go to **Jobs & Pipelines → `partssource-setup-demo`** and click **Run now**
+5. ~8–12 min end to end
 
-End-to-end: ~8–12 minutes on the first run. That's it — no local CLI, no PAT, no SSH.
+No local CLI, no PAT, no SSH.
 
 ---
 
-## Install — from your laptop (CLI)
-
-If you'd rather run from your laptop:
+## Install — from the CLI (alternative path)
 
 ```bash
 git clone <repo-url>
 cd ps-unified-demo
-./scripts/install.sh demo        # or: ./scripts/install.sh dev
+./scripts/install.sh demo    # or: ./scripts/install.sh dev
 ```
 
 Prereqs:
 - Databricks CLI v0.240+ (`databricks auth login` done once)
-- Unity Catalog + serverless compute enabled in the workspace
-
----
-
-## Prereqs (both install paths)
-
-- Unity Catalog enabled (nearly every modern workspace has this)
-- Serverless compute enabled for Jobs + SQL Warehouses + Pipelines
-- The installing user has `CREATE CATALOG` on the metastore (or pre-create the catalog + grant `CREATE SCHEMA`)
+- Unity Catalog + serverless compute enabled
+- The installing user has `CREATE CATALOG` on the metastore (or pre-create the catalog)
 
 ---
 
 ## What the setup job does
 
-| Task | Runs on | What |
-|---|---|---|
-| `create_namespaces` | Serverless SQL warehouse | `CREATE CATALOG / SCHEMA / VOLUME IF NOT EXISTS` |
-| `seed_data` | Serverless Python | Writes 6 CSV datasets to `/Volumes/<catalog>/raw/landing/` |
-| `run_pipeline` | Spark Declarative Pipeline | Full-refresh bronze → silver → gold + reverse_etl |
-| `apply_governance` | Serverless SQL warehouse | PII tags, dynamic column masks, certified tags |
-| `build_metric_views` | Serverless SQL warehouse | Certified `mv_*` views on gold |
-| `setup_genie` | Serverless Python | Creates/updates the Genie space via SDK |
+| # | Task | Type | What |
+|---|---|---|---|
+| 1 | `create_namespaces` | SQL | Catalog + 6 schemas + landing volume |
+| 2 | `seed_data` | Python (serverless) | Shards CSV + JSON into `/Volumes/<cat>/raw/landing/<dataset>/*` |
+| 3 | `run_suppliers_pipeline` | Pipeline | Suppliers domain full-refresh |
+| 4 | `run_parts_pipeline` | Pipeline | Parts domain (depends on suppliers for pricing join) |
+| 5 | `run_service_ops_pipeline` | Pipeline | Service Ops domain (parallel with parts) |
+| 6 | `build_metric_views` | SQL | 5 YAML Metric Views in `business_metrics` |
+| 7 | `apply_governance` | SQL | PII tags + column masks + certified tags |
+| 8 | `check_reorder_alerts` | Notebook | Counts urgent reorders → sets `alert_count` task value |
+| 9 | `alerts_branch` | Condition | `alert_count > 0` → path A; else path B |
+| 10a | `publish_reverse_etl` → `notify_ops` | SQL → Notebook | Rebuild `reverse_etl.*` + log top alerts |
+| 10b | `log_clean_run` | Notebook | Health summary when no alerts |
+| 11 | `setup_genie` | Python | Create/update Genie space over the metric views |
+
+---
+
+## Data quality defects (seeded + caught by SDP expectations)
+
+| Dataset | Defect rate | Expectation | Action |
+|---|---|---|---|
+| `suppliers.silver_suppliers` | 5% `on_time_rate` out of `[0,1]` | `expect_or_drop` | Dropped + counted in the pipeline event log |
+| `parts.silver_parts` | 3% `list_price_usd = 0` | `expect_or_drop` | Dropped |
+| `service_ops.silver_work_orders` | 2% `closed_at < opened_at` | `expect` | Warn-only, visible in event log |
+| `suppliers.silver_purchases` | 0.5% `qty <= 0` | `expect_or_fail` | Fails if rate exceeds threshold (stays under in demo) |
+
+Query the pipeline event log (`event_log(pipeline_id)`) to see per-expectation pass/drop counts.
 
 ---
 
@@ -66,34 +77,35 @@ Prereqs:
 
 | Target | Catalog | Use |
 |---|---|---|
-| `dev` | `partssource_demo_dev` | Iteration; bundle in development mode (prefixed resource names) |
+| `dev` | `partssource_demo_dev` | Iteration (development mode — resource names are prefixed) |
 | `demo` | `partssource_demo` | Customer-facing demo |
 
 ---
 
 ## After install — what you can explore
 
-1. **Catalog Explorer** → your catalog → 4 schemas, PII tags on columns, lineage from bronze through gold
-2. **Jobs & Pipelines → `partssource-medallion-<target>`** — pipeline graph, DQ expectations, observability
-3. **Dashboards → *PartsSource — Operations Overview*** — reorder needs, supplier spend, pricing savings, demand trends
+1. **Catalog Explorer** → `partssource_demo` → 6 schemas, lineage across domains, PII tags
+2. **Jobs & Pipelines** → three domain pipelines + the orchestration job — inspect the DAG, conditional branch, and DQ expectation stats
+3. **Dashboards → *PartsSource — Operations Overview*** — 4 pages: Executive, Supply Chain, Parts & Inventory, Service Ops
 4. **Genie → *PartsSource — Supply Chain Intelligence*** — open, ask:
    - "Top 10 suppliers by total spend"
-   - "Which parts are below reorder point in CHI-02?"
+   - "Which parts are below reorder point in warehouse CHI-02?"
    - "Parts where we're paying >20% below list price"
+   - "SLA attainment by priority last quarter"
 
 ---
 
 ## Idempotency
 
-Everything here is safe to re-run. The setup job uses replacement semantics at every step:
-- `CREATE ... IF NOT EXISTS` for namespaces and volume
-- `upload(overwrite=True)` for seed CSVs
-- `full_refresh: true` for the pipeline
+Every step is safe to re-run:
+- `CREATE ... IF NOT EXISTS` for namespaces + volume
+- `upload(overwrite=True)` for seed shards
+- `full_refresh: true` on every pipeline
+- `CREATE OR REPLACE` for metric views, masking functions, reverse_etl tables
 - `SET TAGS` / `SET MASK` overwrite semantics in UC
-- `CREATE OR REPLACE FUNCTION` / `VIEW`
 - `bundle deploy` upserts by resource name
 
-Running `install.py` twice produces the same end state as running it once.
+Re-running produces the same end state.
 
 ---
 
@@ -103,7 +115,7 @@ Running `install.py` twice produces the same end state as running it once.
 databricks bundle destroy --target demo
 ```
 
-Destroys the bundle-owned objects. The UC catalog itself is preserved by default — safer for shared workspaces. Drop the catalog manually via Catalog Explorer if you want a fully clean slate.
+Destroys bundle-owned resources (jobs, pipelines, dashboard, warehouse). The UC catalog is preserved by default — safer on shared workspaces. Drop it manually if you want a clean slate.
 
 ---
 
@@ -111,28 +123,35 @@ Destroys the bundle-owned objects. The UC catalog itself is preserved by default
 
 ```
 ps-unified-demo/
-├── install.py                    # notebook installer (one-click)
-├── databricks.yml                # bundle definition, variables, targets
+├── databricks.yml                       # bundle definition, variables, targets
 ├── resources/
-│   ├── warehouse.yml             # Serverless SQL warehouse
-│   ├── pipeline.yml              # Spark Declarative pipeline
-│   ├── jobs.yml                  # Orchestrating setup job
-│   └── dashboard.yml             # AI/BI dashboard
+│   ├── warehouse.yml                    # Serverless SQL warehouse
+│   ├── pipelines.yml                    # 3 domain SDP pipelines
+│   ├── jobs.yml                         # Orchestration job (DAG with branching)
+│   ├── dashboard.yml                    # AI/BI dashboard
+│   └── catalog.yml                      # (placeholder — catalog is SQL-created)
 ├── src/
 │   ├── setup/create_namespaces.sql
-│   ├── seed/generate_data.py
-│   ├── pipeline/{bronze,silver,gold}.py
+│   ├── seed/generate_data.py            # sharded CSV + JSON with injected DQ defects
+│   ├── pipeline/
+│   │   ├── _shared.py                   # Auto Loader helpers
+│   │   ├── suppliers/{bronze,silver,gold}.py
+│   │   ├── parts/{bronze,silver,gold}.py
+│   │   └── service_ops/{bronze,silver,gold}.py
 │   ├── governance/apply_governance.sql
-│   ├── semantics/metric_views.sql
+│   ├── jobs/
+│   │   ├── sql/build_metric_views.sql
+│   │   ├── sql/publish_reverse_etl.sql
+│   │   └── notebooks/{check_reorder_alerts,notify_ops,log_clean_run}.py
 │   ├── dashboard/partssource_ops.lvdash.json
 │   └── genie/setup_genie.py
-└── scripts/install.sh            # CLI-based installer (alternative path)
+└── scripts/install.sh                   # CLI alternative installer
 ```
 
 ---
 
 ## Known notes
 
-- **Lakebase + Synced Tables** are not provisioned by this bundle — Lakebase DAB resources are still in preview. Add via the UI or CLI after installing if you want the OLTP leg.
-- **Genie SDK** is evolving; `setup_genie.py` fails soft — if the API signature changes, the job logs a warning and you can create the Genie space manually pointing at `gold.mv_*` views.
-- **Account groups** referenced in the masking functions (e.g. `partssource_pii_viewers`) should be created at the account level if you want the "viewer sees unmasked" behavior. If the group doesn't exist, all users see the masked value — which is the safe default.
+- **Lakebase + Synced Tables** are not provisioned by this bundle — Lakebase DAB resources are still in preview. Add via the UI after install if you want the OLTP leg. The `reverse_etl.*` tables are the designed sync source.
+- **Genie SDK drift** — `setup_genie.py` fails soft. If the API signature changes, the job logs a warning and you can create the Genie space manually pointed at `business_metrics.mv_*`.
+- **Account groups** — the masking functions reference `partssource_pii_viewers`. Create that at the account level if you want "viewer sees unmasked" behavior. Without it, everyone sees the masked value (safe default).

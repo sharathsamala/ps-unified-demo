@@ -49,28 +49,25 @@ print(f"Pipeline:      {PIPELINE_NAME}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 0 — Resolve the repo path (so we can import seed/genie helpers + reference pipeline files)
+# MAGIC ## Step 0 — Resolve the repo path
+# MAGIC
+# MAGIC On serverless notebook compute, reading files under `/Workspace/...` via plain `open()` is unreliable (FUSE flakiness). We use the Workspace API (`w.workspace.export`) to pull file contents on demand.
 
 # COMMAND ----------
 
+import base64
+import importlib.util
 import os
 import sys
+import tempfile
 
 ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
-nb_path = ctx.notebookPath().get()                      # e.g. /Repos/<user>/ps-unified-demo/install
-REPO_WS_PATH = "/Workspace" + os.path.dirname(nb_path)  # /Workspace/Repos/<user>/ps-unified-demo
+nb_path = ctx.notebookPath().get()            # e.g. /Users/<you>/ps-unified-demo/install  OR  /Repos/<you>/ps-unified-demo/install
+REPO_API_PATH = os.path.dirname(nb_path)      # Workspace API path (no /Workspace prefix)
+REPO_WS_PATH = "/Workspace" + REPO_API_PATH   # /Workspace-prefixed path for pipeline libraries
 
-if not os.path.exists(os.path.join(REPO_WS_PATH, "databricks.yml")):
-    raise RuntimeError(
-        f"Bundle files not found at {REPO_WS_PATH}. "
-        "Make sure you opened this notebook from a Databricks Repo clone of ps-unified-demo."
-    )
-
-# Make the bundle `src/` importable (seed, genie modules).
-if os.path.join(REPO_WS_PATH, "src") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO_WS_PATH, "src"))
-
-print(f"Repo dir: {REPO_WS_PATH}")
+print(f"Repo (API path):       {REPO_API_PATH}")
+print(f"Repo (/Workspace path): {REPO_WS_PATH}")
 
 # COMMAND ----------
 
@@ -83,6 +80,24 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import CreateWarehouseRequestWarehouseType, EndpointInfoWarehouseType
 
 w = WorkspaceClient()
+
+
+def read_workspace_file(api_path):
+    """Read a file from the workspace via the API. Reliable on serverless."""
+    export = w.workspace.export(path=api_path)
+    return base64.b64decode(export.content).decode()
+
+
+def import_from_workspace(module_name, api_path):
+    """Download a .py file from workspace via API and import it as a module."""
+    content = read_workspace_file(api_path)
+    tmp_path = os.path.join(tempfile.gettempdir(), f"{module_name}.py")
+    with open(tmp_path, "w") as f:
+        f.write(content)
+    spec = importlib.util.spec_from_file_location(module_name, tmp_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def find_or_create_warehouse():
@@ -167,9 +182,8 @@ print(f"  volume: {CATALOG}.raw.landing")
 
 # COMMAND ----------
 
-from seed.generate_data import generate_all
-
-generate_all(CATALOG)
+seed_mod = import_from_workspace("generate_data", f"{REPO_API_PATH}/src/seed/generate_data.py")
+seed_mod.generate_all(CATALOG)
 
 # COMMAND ----------
 
@@ -272,22 +286,18 @@ print("Pipeline full refresh complete.")
 import re
 
 
-def run_sql_file(path, catalog):
-    """Read a .sql file, substitute `:catalog`, split into statements, execute each."""
-    with open(path, "r") as f:
-        raw = f.read()
-    # Strip line comments
+def run_sql_file(api_path, catalog):
+    """Read a .sql file via Workspace API, substitute `:catalog`, split, execute each statement."""
+    raw = read_workspace_file(api_path)
     cleaned = "\n".join(l for l in raw.splitlines() if not l.strip().startswith("--"))
-    # Substitute parameter markers
     substituted = cleaned.replace("IDENTIFIER(:catalog)", catalog).replace(":catalog", catalog)
-    # Split on `;` at end of line. Keep it simple — none of our files embed `;` in strings.
     statements = [s.strip() for s in re.split(r";\s*\n", substituted) if s.strip()]
     for stmt in statements:
         print(f"  exec: {stmt.splitlines()[0][:90]}...")
         sql_exec(stmt)
 
 
-run_sql_file(os.path.join(REPO_WS_PATH, "src/governance/apply_governance.sql"), CATALOG)
+run_sql_file(f"{REPO_API_PATH}/src/governance/apply_governance.sql", CATALOG)
 print("Governance applied.")
 
 # COMMAND ----------
@@ -297,7 +307,7 @@ print("Governance applied.")
 
 # COMMAND ----------
 
-run_sql_file(os.path.join(REPO_WS_PATH, "src/semantics/metric_views.sql"), CATALOG)
+run_sql_file(f"{REPO_API_PATH}/src/semantics/metric_views.sql", CATALOG)
 print("Metric views built.")
 
 # COMMAND ----------
@@ -307,9 +317,8 @@ print("Metric views built.")
 
 # COMMAND ----------
 
-from genie.setup_genie import run_genie_setup
-
-run_genie_setup(CATALOG, WAREHOUSE_ID)
+genie_mod = import_from_workspace("setup_genie", f"{REPO_API_PATH}/src/genie/setup_genie.py")
+genie_mod.run_genie_setup(CATALOG, WAREHOUSE_ID)
 
 # COMMAND ----------
 

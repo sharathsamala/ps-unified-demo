@@ -192,9 +192,7 @@ seed_mod.generate_all(CATALOG)
 
 # COMMAND ----------
 
-from databricks.sdk.service.pipelines import (
-    CreatePipeline, EditPipeline, PipelineLibrary, FileLibrary, NotebookLibrary,
-)
+from databricks.sdk.service.pipelines import PipelineLibrary, FileLibrary
 
 PIPELINE_LIBS = [
     PipelineLibrary(file=FileLibrary(path=f"{REPO_WS_PATH}/src/pipeline/bronze.py")),

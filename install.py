@@ -141,12 +141,13 @@ print(f"Warehouse ID: {WAREHOUSE_ID}")
 from databricks.sdk.service.sql import StatementState
 
 
-def sql_exec(statement, catalog=None):
+def sql_exec(statement, catalog=None, schema=None):
     """Run a single SQL statement against the warehouse. Raises on failure."""
     resp = w.statement_execution.execute_statement(
         warehouse_id=WAREHOUSE_ID,
         statement=statement,
         catalog=catalog,
+        schema=schema,
         wait_timeout="50s",
     )
     # Poll if not done.
@@ -285,14 +286,37 @@ import re
 
 
 def run_sql_file(api_path, catalog):
-    """Read a .sql file via Workspace API, substitute `:catalog`, split, execute each statement."""
+    """Read a .sql file via Workspace API, substitute `:catalog`, split, execute each statement.
+
+    Tracks `USE CATALOG` / `USE SCHEMA` statements in-file and forwards them as
+    per-statement session context — each execute_statement call is an independent
+    session, so we can't rely on `USE` persisting.
+    """
     raw = read_workspace_file(api_path)
     cleaned = "\n".join(l for l in raw.splitlines() if not l.strip().startswith("--"))
     substituted = cleaned.replace("IDENTIFIER(:catalog)", catalog).replace(":catalog", catalog)
     statements = [s.strip() for s in re.split(r";\s*\n", substituted) if s.strip()]
+
+    active_catalog, active_schema = catalog, None
     for stmt in statements:
+        stripped = stmt.strip().rstrip(";").strip()
+        m_cat = re.match(r"(?is)^\s*USE\s+CATALOG\s+([A-Za-z0-9_]+)\s*$", stripped)
+        m_sch = re.match(r"(?is)^\s*USE\s+(?:SCHEMA\s+)?([A-Za-z0-9_.]+)\s*$", stripped)
+        if m_cat:
+            active_catalog = m_cat.group(1)
+            print(f"  [context] catalog={active_catalog}")
+            continue
+        if stripped.lower().startswith("use schema") or (m_sch and not stripped.lower().startswith("use catalog")):
+            # `USE SCHEMA foo` or `USE foo` → schema context
+            target = re.sub(r"(?is)^\s*USE\s+(SCHEMA\s+)?", "", stripped).strip()
+            if "." in target:
+                active_catalog, active_schema = target.split(".", 1)
+            else:
+                active_schema = target
+            print(f"  [context] schema={active_schema}")
+            continue
         print(f"  exec: {stmt.splitlines()[0][:90]}...")
-        sql_exec(stmt)
+        sql_exec(stmt, catalog=active_catalog, schema=active_schema)
 
 
 run_sql_file(f"{REPO_API_PATH}/src/governance/apply_governance.sql", CATALOG)

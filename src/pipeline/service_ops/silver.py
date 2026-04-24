@@ -13,7 +13,7 @@ from pyspark.sql.functions import col, to_timestamp, when
 @dlt.expect("contract_tier_known", "contract_tier IN ('Gold', 'Silver', 'Bronze')")
 def silver_customers():
     return (
-        dlt.read("bronze_customers")
+        dlt.read_stream("bronze_customers")
         .select(
             col("customer_id").cast("bigint"),
             col("facility_name"),
@@ -36,7 +36,7 @@ def silver_customers():
 @dlt.expect("status_known", "status IN ('closed','in_progress','open','cancelled')")
 @dlt.expect("priority_known", "priority IN ('P1','P2','P3','P4')")
 def silver_work_orders():
-    raw = dlt.read("bronze_work_orders")
+    raw = dlt.read_stream("bronze_work_orders")
     return (
         raw.select(
             col("work_order_id").cast("bigint"),

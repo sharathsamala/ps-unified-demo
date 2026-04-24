@@ -8,8 +8,8 @@ A single Databricks Asset Bundle that stands up a governed, AI-ready Lakehouse d
 - **Three domain SDP pipelines** (bronze → silver → gold) with **data-quality expectations** that catch injected defects
 - **Certified Metric Views** in `business_metrics` (`mv_supplier_spend`, `mv_pricing_benchmark`, `mv_reorder_needed`, `mv_part_demand`, `mv_sla_performance`)
 - **Orchestration job** demonstrating SQL tasks, pipeline tasks, notebook tasks, a condition task with branching, and reverse-ETL publication
-- **4-page AI/BI Dashboard** — Executive / Supply Chain / Parts & Inventory / Service Ops
-- **Genie Space** pointed at all 5 metric views, with curated instructions + sample questions
+- **4-page AI/BI Dashboard** — Executive / Supply Chain / Parts & Inventory / Service Ops (auto-published by the setup job)
+- **Genie Space** pointed at all 5 metric views, provisioned via REST in the setup job
 - **Serverless SQL warehouse** — auto-created
 
 ---
@@ -56,7 +56,7 @@ Prereqs:
 | 9 | `alerts_branch` | Condition | `alert_count > 0` → path A; else path B |
 | 10a | `publish_reverse_etl` → `notify_ops` | SQL → Notebook | Rebuild `reverse_etl.*` + log top alerts |
 | 10b | `log_clean_run` | Notebook | Health summary when no alerts |
-| 11 | `setup_genie` | Python | Create/update Genie space over the metric views |
+| 11 | `setup_genie` | Python | Create/update Genie space over the 5 metric views + publish the dashboard |
 
 ---
 
@@ -67,7 +67,7 @@ Prereqs:
 | `suppliers.silver_suppliers` | 5% `on_time_rate` out of `[0,1]` | `expect_or_drop` | Dropped + counted in the pipeline event log |
 | `parts.silver_parts` | 3% `list_price_usd = 0` | `expect_or_drop` | Dropped |
 | `service_ops.silver_work_orders` | 2% `closed_at < opened_at` | `expect` | Warn-only, visible in event log |
-| `suppliers.silver_purchases` | 0.5% `qty <= 0` | `expect_or_fail` | Fails if rate exceeds threshold (stays under in demo) |
+| `suppliers.silver_purchases` | 0.5% `qty <= 0` | `expect_or_drop` | Dropped |
 
 Query the pipeline event log (`event_log(pipeline_id)`) to see per-expectation pass/drop counts.
 
@@ -139,7 +139,6 @@ ps-unified-demo/
 │   ├── setup/create_namespaces.sql
 │   ├── seed/generate_data.py            # sharded CSV + JSON with injected DQ defects
 │   ├── pipeline/
-│   │   ├── _shared.py                   # Auto Loader helpers
 │   │   ├── suppliers/{bronze,silver,gold}.py
 │   │   ├── parts/{bronze,silver,gold}.py
 │   │   └── service_ops/{bronze,silver,gold}.py
@@ -158,5 +157,5 @@ ps-unified-demo/
 ## Known notes
 
 - **Lakebase + Synced Tables** are not provisioned by this bundle — Lakebase DAB resources are still in preview. Add via the UI after install if you want the OLTP leg. The `reverse_etl.*` tables are the designed sync source.
-- **Genie SDK drift** — `setup_genie.py` fails soft. If the API signature changes, the job logs a warning and you can create the Genie space manually pointed at `business_metrics.mv_*`.
+- **Genie instructions + sample questions** — `setup_genie.py` creates the space with the 5 metric views over the `GenieSpaceExport` v2 proto (tables only, since the instructions/sample_questions sub-proto fields are still private). Add curated instructions + seed questions via the Genie UI after install.
 - **Account groups** — the masking functions reference `partssource_pii_viewers`. Create that at the account level if you want "viewer sees unmasked" behavior. Without it, everyone sees the masked value (safe default).

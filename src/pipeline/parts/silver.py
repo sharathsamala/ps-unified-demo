@@ -14,7 +14,7 @@ from pyspark.sql.functions import col, to_timestamp
 @dlt.expect("sku_present", "sku IS NOT NULL AND length(sku) > 0")
 def silver_parts():
     return (
-        dlt.read("bronze_parts")
+        dlt.read_stream("bronze_parts")
         .select(
             col("part_id").cast("bigint"),
             col("sku"),
@@ -38,7 +38,7 @@ def silver_parts():
 @dlt.expect("reorder_point_positive", "reorder_point > 0")
 def silver_inventory():
     return (
-        dlt.read("bronze_inventory")
+        dlt.read_stream("bronze_inventory")
         .select(
             col("inventory_id").cast("bigint"),
             col("part_id").cast("bigint"),

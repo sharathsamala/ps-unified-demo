@@ -1,129 +1,142 @@
-"""
-Create or update the PartsSource Genie space.
+"""Provision the Genie space + publish the AI/BI dashboard.
 
-Genie spaces don't have a first-class DAB resource, so we provision via the
-Databricks SDK. Idempotent: if a space with the same title exists, it's updated.
-Fail-soft: if the SDK's genie surface has drifted, we log a warning and return
-cleanly so the job still succeeds.
+Genie spaces and dashboard publishing don't have first-class DAB resources,
+so we provision via the REST API.
+
+- Idempotent: existing space is updated (trash + recreate) to keep the
+  serialized_space in sync.
+- Publishes the '[...] PartsSource — Operations Overview' dashboard so its
+  public URL is usable without editing.
 """
 
 import argparse
+import json
+import sys
+import time
 
 from databricks.sdk import WorkspaceClient
 
 
-INSTRUCTIONS = """\
-You are an analyst helping PartsSource operations, procurement, and service teams.
-
-Use only the certified metric views in the `business_metrics` schema. Each view
-maps to a business domain:
-  - mv_supplier_spend     (suppliers)   supplier spend, on-time rate, composite score
-  - mv_pricing_benchmark  (parts)       list vs paid pricing, savings opportunities
-  - mv_reorder_needed     (parts)       parts at or below reorder point per warehouse
-  - mv_part_demand        (service_ops) monthly work-order volume per part
-  - mv_sla_performance    (service_ops) SLA attainment by priority
-
-Key terms:
-- "Composite score" = 0.6 * on_time_rate + 0.4 * (1 - defect_rate_ppm / 5000).
-- "Reorder point" = threshold below which a warehouse replenishes stock.
-- "Savings vs list" = (list_price - avg_paid) / list_price. Negative means overpaying.
-- "Tier" order: Preferred > Approved > Probation.
-- "SLA target": P1 = 48h, P2 = 120h, P3/P4 = 240h. sla_pct is (met / closed).
-
-Style:
-- Be concise. Prefer small tables to long prose.
-- When ambiguous ("top suppliers"), ask once: by spend, on-time rate, or composite?
-- Never query bronze or silver schemas directly — only `business_metrics.mv_*`.
-"""
-
-SAMPLE_QUESTIONS = [
-    "Top 10 suppliers by total spend",
-    "Which parts are below reorder point in warehouse CHI-02?",
-    "Parts where we're paying more than 20% below list price",
-    "Trend of work orders per month for the Imaging category",
-    "Suppliers with defect rate over 2000 PPM and spend above $50k",
-    "SLA attainment by priority last quarter",
-    "Estimated reorder value by warehouse right now",
-    "Average work order duration per priority",
-]
+SPACE_TITLE_TEMPLATE = "PartsSource — Supply Chain Intelligence ({catalog})"
+DASHBOARD_NAME_SUFFIX = "PartsSource — Operations Overview"
 
 
-def run_genie_setup(catalog, warehouse_id):
-    """Create or update the Genie space. Fail-soft on SDK drift."""
-    title = f"PartsSource — Supply Chain Intelligence ({catalog})"
-    description = (
-        "Natural-language analytics over PartsSource operations: suppliers, "
-        "parts, and service. Governed by Unity Catalog metric views in "
-        "`business_metrics`."
-    )
-    tables = [
+def _serialized_space(catalog):
+    """Return the Genie space export proto (version 2) as a JSON string.
+
+    The proto `databricks.datarooms.export.GenieSpaceExport` accepts
+    `version` + `data_sources.tables[*].identifier`. Instructions and sample
+    questions need to be added via the UI — the proto's extended fields are
+    private and not yet documented.
+    """
+    tables = sorted([
         f"{catalog}.business_metrics.mv_supplier_spend",
         f"{catalog}.business_metrics.mv_pricing_benchmark",
         f"{catalog}.business_metrics.mv_reorder_needed",
         f"{catalog}.business_metrics.mv_part_demand",
         f"{catalog}.business_metrics.mv_sla_performance",
-    ]
+    ])
+    return json.dumps({
+        "version": 2,
+        "data_sources": {
+            "tables": [{"identifier": t} for t in tables],
+        },
+    })
 
-    w = WorkspaceClient()
-    genie = getattr(w, "genie", None)
-    if genie is None:
-        print("[warn] WorkspaceClient has no `genie` attribute in this SDK version.")
-        print("Create the Genie space manually in the UI pointing at business_metrics.mv_*.")
+
+def _api(w, method, path, body=None):
+    return w.api_client.do(method, path, body=body)
+
+
+def provision_genie_space(w, catalog, warehouse_id):
+    title = SPACE_TITLE_TEMPLATE.format(catalog=catalog)
+    description = (
+        f"Natural-language analytics over PartsSource operations on the "
+        f"`{catalog}` catalog. Backed by certified metric views in "
+        f"`{catalog}.business_metrics`."
+    )
+
+    existing_id = None
+    try:
+        resp = _api(w, "GET", "/api/2.0/genie/spaces")
+        for s in resp.get("spaces", []):
+            if s.get("title") == title:
+                existing_id = s["space_id"]
+                break
+    except Exception as e:
+        print(f"[warn] list Genie spaces failed: {e}")
+
+    payload = {
+        "title": title,
+        "description": description,
+        "warehouse_id": warehouse_id,
+        "serialized_space": _serialized_space(catalog),
+    }
+
+    if existing_id:
+        print(f"Updating Genie space {existing_id}")
+        _api(w, "PATCH", f"/api/2.0/genie/spaces/{existing_id}", payload)
+        space_id = existing_id
+    else:
+        print(f"Creating Genie space '{title}'")
+        resp = _api(w, "POST", "/api/2.0/genie/spaces", payload)
+        space_id = resp.get("space_id")
+        print(f"Created Genie space {space_id}")
+
+    return space_id
+
+
+def publish_dashboard(w):
+    try:
+        resp = _api(w, "GET", "/api/2.0/lakeview/dashboards")
+    except Exception as e:
+        print(f"[warn] list dashboards failed: {e}")
         return
 
-    list_fn = getattr(genie, "list_spaces", None)
-    create_fn = getattr(genie, "create_space", None)
-    update_fn = getattr(genie, "update_space", None)
+    target = None
+    for d in resp.get("dashboards", []):
+        name = d.get("display_name", "")
+        if DASHBOARD_NAME_SUFFIX in name and d.get("lifecycle_state") == "ACTIVE":
+            target = d
+            break
 
-    existing = None
-    if callable(list_fn):
-        try:
-            for space in list_fn():
-                if getattr(space, "title", None) == title:
-                    existing = space
-                    break
-        except Exception as e:
-            print(f"[warn] list_spaces failed ({e}); proceeding to create")
+    if not target:
+        print(f"[warn] no active dashboard matching '{DASHBOARD_NAME_SUFFIX}'")
+        return
 
-    try:
-        if existing and callable(update_fn):
-            print(f"Updating Genie space: {existing.space_id}")
-            update_fn(
-                space_id=existing.space_id,
-                title=title,
-                description=description,
-                warehouse_id=warehouse_id,
-                tables=tables,
-                instructions=INSTRUCTIONS,
-                sample_questions=SAMPLE_QUESTIONS,
-            )
-            print("Updated.")
-        elif callable(create_fn):
-            print("Creating Genie space")
-            resp = create_fn(
-                title=title,
-                description=description,
-                warehouse_id=warehouse_id,
-                tables=tables,
-                instructions=INSTRUCTIONS,
-                sample_questions=SAMPLE_QUESTIONS,
-            )
-            print(f"Created: {getattr(resp, 'space_id', '<no id>')}")
-        else:
-            print("[warn] Genie SDK does not expose create_space/update_space.")
-            print("Create the Genie space manually pointing at business_metrics.mv_*.")
-    except Exception as e:
-        print(f"[warn] Genie setup failed: {e}")
-        print("Continuing — create the Genie space manually pointing at business_metrics.mv_*.")
+    dashboard_id = target["dashboard_id"]
+    warehouse_id = target.get("warehouse_id")
+    print(f"Publishing dashboard {dashboard_id} ({target.get('display_name')})")
+    _api(
+        w,
+        "POST",
+        f"/api/2.0/lakeview/dashboards/{dashboard_id}/published",
+        {"embed_credentials": True, "warehouse_id": warehouse_id},
+    )
+    print("Dashboard published.")
 
 
-def _cli_main():
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--warehouse-id", required=True)
     args, _ = parser.parse_known_args()
-    run_genie_setup(args.catalog, args.warehouse_id)
+
+    w = WorkspaceClient()
+
+    # Genie
+    try:
+        provision_genie_space(w, args.catalog, args.warehouse_id)
+    except Exception as e:
+        print(f"[warn] Genie provisioning failed: {e}")
+        print("Create the Genie space manually over business_metrics.mv_*.")
+
+    # Dashboard publish (independent of Genie)
+    try:
+        publish_dashboard(w)
+    except Exception as e:
+        print(f"[warn] dashboard publish failed: {e}")
 
 
 if __name__ == "__main__":
-    _cli_main()
+    main()

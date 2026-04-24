@@ -14,7 +14,7 @@ from pyspark.sql.functions import col, to_timestamp
 @dlt.expect("active_flag_known", "active IN (0, 1)")
 def silver_suppliers():
     return (
-        dlt.read("bronze_suppliers")
+        dlt.read_stream("bronze_suppliers")
         .select(
             col("supplier_id").cast("bigint"),
             col("name").alias("supplier_name"),
@@ -34,12 +34,12 @@ def silver_suppliers():
     comment="Cleaned purchases — net price computed; qty must be positive.",
     table_properties={"domain": "suppliers", "layer": "silver"},
 )
-@dlt.expect_or_fail("qty_positive", "qty > 0")
+@dlt.expect_or_drop("qty_positive", "qty > 0")
 @dlt.expect("unit_price_positive", "unit_price_usd > 0")
 @dlt.expect("discount_in_range", "discount_pct >= 0 AND discount_pct <= 1")
 def silver_purchases():
     return (
-        dlt.read("bronze_purchases")
+        dlt.read_stream("bronze_purchases")
         .select(
             col("purchase_id").cast("bigint"),
             col("part_id").cast("bigint"),

@@ -60,23 +60,23 @@ ALTER TABLE service_ops.silver_customers
 -- ---------------------------------------------------------------------
 -- 4. Certified tags on gold tables (Genie/AI/BI consumption hints)
 -- ---------------------------------------------------------------------
-ALTER TABLE suppliers.gold_supplier_performance
+ALTER VIEW suppliers.gold_supplier_performance
   SET TAGS ('certified' = 'true', 'domain' = 'suppliers', 'steward' = 'supply_chain_team');
 
-ALTER TABLE suppliers.gold_spend_by_region
+ALTER VIEW suppliers.gold_spend_by_region
   SET TAGS ('certified' = 'true', 'domain' = 'suppliers', 'steward' = 'supply_chain_team');
 
-ALTER TABLE parts.gold_part_pricing_benchmark
+ALTER VIEW parts.gold_part_pricing_benchmark
   SET TAGS ('certified' = 'true', 'domain' = 'parts', 'steward' = 'procurement_team');
 
-ALTER TABLE parts.gold_reorder_needed
+ALTER VIEW parts.gold_reorder_needed
   SET TAGS ('certified' = 'true', 'domain' = 'parts', 'steward' = 'operations_team');
 
-ALTER TABLE service_ops.gold_work_order_volume
+ALTER VIEW service_ops.gold_work_order_volume
   SET TAGS ('certified' = 'true', 'domain' = 'service_ops', 'steward' = 'service_team');
 
-ALTER TABLE service_ops.gold_part_demand_monthly
+ALTER VIEW service_ops.gold_part_demand_monthly
   SET TAGS ('certified' = 'true', 'domain' = 'service_ops', 'steward' = 'planning_team');
 
-ALTER TABLE service_ops.gold_sla_performance
+ALTER VIEW service_ops.gold_sla_performance
   SET TAGS ('certified' = 'true', 'domain' = 'service_ops', 'steward' = 'service_team');

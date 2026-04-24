@@ -1,7 +1,23 @@
 """service_ops bronze — raw ingest."""
 
 import dlt
-from _shared import read_csv, read_json
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.getOrCreate()
+CATALOG = spark.conf.get("ps.catalog")
+
+
+def _read(dataset, fmt):
+    return (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", fmt)
+        .option("cloudFiles.schemaLocation", f"/Volumes/{CATALOG}/raw/landing/_schemas/{dataset}")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+        .option("header", "true")
+        .option("rescuedDataColumn", "_rescued")
+        .load(f"/Volumes/{CATALOG}/raw/landing/{dataset}")
+    )
 
 
 @dlt.table(
@@ -10,7 +26,7 @@ from _shared import read_csv, read_json
     table_properties={"domain": "service_ops", "layer": "bronze"},
 )
 def bronze_customers():
-    return read_json("customers")
+    return _read("customers", "json")
 
 
 @dlt.table(
@@ -19,4 +35,4 @@ def bronze_customers():
     table_properties={"domain": "service_ops", "layer": "bronze"},
 )
 def bronze_work_orders():
-    return read_csv("work_orders")
+    return _read("work_orders", "csv")

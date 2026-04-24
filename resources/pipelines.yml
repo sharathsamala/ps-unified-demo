@@ -12,8 +12,6 @@ resources:
       continuous: false
       libraries:
         - file:
-            path: ../src/pipeline/_shared.py
-        - file:
             path: ../src/pipeline/suppliers/bronze.py
         - file:
             path: ../src/pipeline/suppliers/silver.py
@@ -34,8 +32,6 @@ resources:
       continuous: false
       libraries:
         - file:
-            path: ../src/pipeline/_shared.py
-        - file:
             path: ../src/pipeline/parts/bronze.py
         - file:
             path: ../src/pipeline/parts/silver.py
@@ -55,8 +51,6 @@ resources:
       edition: ADVANCED
       continuous: false
       libraries:
-        - file:
-            path: ../src/pipeline/_shared.py
         - file:
             path: ../src/pipeline/service_ops/bronze.py
         - file:

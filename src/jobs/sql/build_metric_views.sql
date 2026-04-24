@@ -13,7 +13,7 @@ WITH METRICS
 LANGUAGE YAML
 AS $$
 version: 0.1
-source: ${catalog}.suppliers.gold_supplier_performance
+source: partssource_demo.suppliers.gold_supplier_performance
 dimensions:
   - name: supplier_id
     expr: supplier_id
@@ -45,7 +45,7 @@ WITH METRICS
 LANGUAGE YAML
 AS $$
 version: 0.1
-source: ${catalog}.parts.gold_part_pricing_benchmark
+source: partssource_demo.parts.gold_part_pricing_benchmark
 dimensions:
   - name: part_id
     expr: part_id
@@ -77,7 +77,7 @@ WITH METRICS
 LANGUAGE YAML
 AS $$
 version: 0.1
-source: ${catalog}.parts.gold_reorder_needed
+source: partssource_demo.parts.gold_reorder_needed
 dimensions:
   - name: part_id
     expr: part_id
@@ -107,7 +107,7 @@ WITH METRICS
 LANGUAGE YAML
 AS $$
 version: 0.1
-source: ${catalog}.service_ops.gold_part_demand_monthly
+source: partssource_demo.service_ops.gold_part_demand_monthly
 dimensions:
   - name: part_id
     expr: part_id
@@ -131,7 +131,7 @@ WITH METRICS
 LANGUAGE YAML
 AS $$
 version: 0.1
-source: ${catalog}.service_ops.gold_sla_performance
+source: partssource_demo.service_ops.gold_sla_performance
 dimensions:
   - name: priority
     expr: priority

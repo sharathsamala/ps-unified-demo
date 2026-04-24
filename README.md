@@ -75,10 +75,15 @@ Query the pipeline event log (`event_log(pipeline_id)`) to see per-expectation p
 
 ## Targets
 
-| Target | Catalog | Use |
+Both targets use the same catalog (`partssource_demo`). `dev` runs in bundle
+**development mode** (resource names are prefixed with the deploying user) so
+multiple developers can share a workspace without collisions. `demo` runs in
+**production mode** for the customer-facing install.
+
+| Target | Catalog | Mode |
 |---|---|---|
-| `dev` | `partssource_demo_dev` | Iteration (development mode — resource names are prefixed) |
-| `demo` | `partssource_demo` | Customer-facing demo |
+| `dev` | `partssource_demo` | development (user-prefixed resources) |
+| `demo` | `partssource_demo` | production |
 
 ---
 

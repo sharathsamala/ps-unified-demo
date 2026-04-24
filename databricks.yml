@@ -22,7 +22,7 @@ targets:
     mode: development
     default: true
     variables:
-      catalog: partssource_demo_dev
+      catalog: partssource_demo
 
   demo:
     mode: production

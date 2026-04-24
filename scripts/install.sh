@@ -17,11 +17,7 @@ if [[ "${2:-}" == "--deploy-only" ]]; then
   RUN_JOB=0
 fi
 
-case "$TARGET" in
-  dev)  CATALOG="partssource_demo_dev" ;;
-  demo) CATALOG="partssource_demo" ;;
-  *)    CATALOG="partssource_demo" ;;
-esac
+CATALOG="partssource_demo"
 
 export DATABRICKS_BUNDLE_ENGINE=direct
 

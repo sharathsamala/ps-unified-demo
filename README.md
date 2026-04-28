@@ -10,6 +10,7 @@ A single Databricks Asset Bundle that stands up a governed, AI-ready Lakehouse d
 - **Orchestration job** demonstrating SQL tasks, pipeline tasks, notebook tasks, a condition task with branching, and reverse-ETL publication
 - **4-page AI/BI Dashboard** — Executive / Supply Chain / Parts & Inventory / Service Ops (auto-published by the setup job)
 - **Genie Space** pointed at all 5 metric views, provisioned via REST in the setup job
+- **Vector Search** — managed-embeddings (`databricks-gte-large-en`) Delta-sync index over `parts.parts_searchable`, with a demo notebook running NL similarity queries
 - **Serverless SQL warehouse** — auto-created
 
 ---
@@ -52,11 +53,14 @@ Prereqs:
 | 5 | `run_service_ops_pipeline` | Pipeline | Service Ops domain (parallel with parts) |
 | 6 | `build_metric_views` | SQL | 5 YAML Metric Views in `business_metrics` |
 | 7 | `apply_governance` | SQL | PII tags + column masks + certified tags |
-| 8 | `check_reorder_alerts` | Notebook | Counts urgent reorders → sets `alert_count` task value |
-| 9 | `alerts_branch` | Condition | `alert_count > 0` → path A; else path B |
-| 10a | `publish_reverse_etl` → `notify_ops` | SQL → Notebook | Rebuild `reverse_etl.*` + log top alerts |
-| 10b | `log_clean_run` | Notebook | Health summary when no alerts |
-| 11 | `setup_genie` | Python | Create/update Genie space over the 5 metric views + publish the dashboard |
+| 8 | `build_searchable_table` | SQL | Build CDF-enabled `parts.parts_searchable` (source for VS) |
+| 9 | `setup_vector_search` | Python | Create/reuse VS endpoint + Delta-sync index, wait READY |
+| 10 | `demo_vector_search` | Notebook | Run example similarity queries against the parts index |
+| 11 | `check_reorder_alerts` | Notebook | Counts urgent reorders → sets `alert_count` task value |
+| 12 | `alerts_branch` | Condition | `alert_count > 0` → path A; else path B |
+| 13a | `publish_reverse_etl` → `notify_ops` | SQL → Notebook | Rebuild `reverse_etl.*` + log top alerts |
+| 13b | `log_clean_run` | Notebook | Health summary when no alerts |
+| 14 | `setup_genie` | Python | Create/update Genie space over the 5 metric views + publish the dashboard |
 
 ---
 
@@ -145,10 +149,12 @@ ps-unified-demo/
 │   ├── governance/apply_governance.sql
 │   ├── jobs/
 │   │   ├── sql/build_metric_views.sql
+│   │   ├── sql/build_searchable_table.sql
 │   │   ├── sql/publish_reverse_etl.sql
-│   │   └── notebooks/{check_reorder_alerts,notify_ops,log_clean_run}.py
+│   │   └── notebooks/{check_reorder_alerts,notify_ops,log_clean_run,demo_vector_search}.py
 │   ├── dashboard/partssource_ops.lvdash.json
-│   └── genie/setup_genie.py
+│   ├── genie/setup_genie.py
+│   └── genai/setup_vector_search.py
 └── scripts/install.sh                   # CLI alternative installer
 ```
 
@@ -159,3 +165,4 @@ ps-unified-demo/
 - **Lakebase + Synced Tables** are not provisioned by this bundle — Lakebase DAB resources are still in preview. Add via the UI after install if you want the OLTP leg. The `reverse_etl.*` tables are the designed sync source.
 - **Genie instructions + sample questions** — `setup_genie.py` creates the space with the 5 metric views over the `GenieSpaceExport` v2 proto (tables only, since the instructions/sample_questions sub-proto fields are still private). Add curated instructions + seed questions via the Genie UI after install.
 - **Account groups** — the masking functions reference `partssource_pii_viewers`. Create that at the account level if you want "viewer sees unmasked" behavior. Without it, everyone sees the masked value (safe default).
+- **Vector Search endpoint** — the bundle reuses an endpoint named `partssource-vs-endpoint` (override via `--var vs_endpoint=…`). First-time create takes ~5 min to come ONLINE; the index sync over 50k rows is another ~3–5 min. Re-runs of the job trigger an incremental sync, not a recreate. The embedding model defaults to `databricks-gte-large-en` (managed) — swap to a Google embedding serving endpoint to match the production GenAI stack.

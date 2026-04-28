@@ -11,6 +11,9 @@ variables:
   warehouse_name:
     description: Serverless SQL warehouse name used by dashboard + metric views.
     default: partssource-demo-wh
+  vs_endpoint:
+    description: Vector Search endpoint name for the parts catalog index.
+    default: partssource-vs-endpoint
 
 include:
   - resources/*.yml

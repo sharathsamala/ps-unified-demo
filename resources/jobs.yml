@@ -12,6 +12,8 @@ resources:
           default: ${var.catalog}
         - name: warehouse_id
           default: ${resources.sql_warehouses.partssource_wh.id}
+        - name: vs_endpoint
+          default: ${var.vs_endpoint}
 
       # Single serverless environment version used by all Python + notebook tasks.
       # Bump to the latest available version via `databricks bundle deploy` feedback.
@@ -95,11 +97,47 @@ resources:
             parameters:
               catalog: "{{job.parameters.catalog}}"
 
-        # ---- 6. Branch on reorder alerts --------------------------------------
+        # ---- 6. Vector Search — searchable table + endpoint + index + demo ----
+        - task_key: build_searchable_table
+          description: Build CDF-enabled parts_searchable Delta table for VS.
+          depends_on:
+            - task_key: apply_governance
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.partssource_wh.id}
+            file:
+              path: ../src/jobs/sql/build_searchable_table.sql
+            parameters:
+              catalog: "{{job.parameters.catalog}}"
+
+        - task_key: setup_vector_search
+          description: Create/reuse VS endpoint + Delta-sync index, wait until READY.
+          depends_on:
+            - task_key: build_searchable_table
+          environment_key: serverless_env
+          spark_python_task:
+            python_file: ../src/genai/setup_vector_search.py
+            parameters:
+              - "--catalog"
+              - "{{job.parameters.catalog}}"
+              - "--endpoint-name"
+              - "{{job.parameters.vs_endpoint}}"
+
+        - task_key: demo_vector_search
+          description: Run example similarity queries against the parts index.
+          depends_on:
+            - task_key: setup_vector_search
+          environment_key: serverless_env
+          notebook_task:
+            notebook_path: ../src/jobs/notebooks/demo_vector_search.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              endpoint_name: "{{job.parameters.vs_endpoint}}"
+
+        # ---- 7. Branch on reorder alerts --------------------------------------
         - task_key: check_reorder_alerts
           description: Count urgent reorders and emit `alert_count` task value.
           depends_on:
-            - task_key: apply_governance
+            - task_key: demo_vector_search
           environment_key: serverless_env
           notebook_task:
             notebook_path: ../src/jobs/notebooks/check_reorder_alerts.py
